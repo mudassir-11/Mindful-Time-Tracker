@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User preferences and settings for time tracking",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique user ID" },
+        "categories": {
+          "type": "array",
+          "description": "Custom categories for time tracking",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "color": { "type": "string" }
+            }
+          }
+        },
+        "onboardingComplete": { "type": "boolean" }
+      },
+      "required": ["userId"]
+    },
+    "ActivityLog": {
+      "title": "Activity Log",
+      "description": "A single hour's activity log entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "hour": { "type": "integer", "description": "0-23" },
+        "activity": { "type": "string", "description": "What was done during this hour" },
+        "categoryId": { "type": "string", "description": "Reference to a category ID" },
+        "durationMinutes": { "type": "integer", "description": "Minutes spent (usually 60)" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "date", "hour", "categoryId"]
+    },
+    "Goal": {
+      "title": "Goal",
+      "description": "Time spending goal for a specific category",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "targetHoursPerDay": { "type": "number" },
+        "specificObjectives": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["userId", "categoryId", "targetHoursPerDay"]
+    },
+    "Journal": {
+      "title": "Journal Entry",
+      "description": "Reflection on learning and productivity",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "content": { "type": "string" },
+        "mood": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "date", "content"]
+    },
+    "Reminder": {
+      "title": "Reminder",
+      "description": "Task or study session reminder",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "time": { "type": "string", "format": "date-time" },
+        "category": { "type": "string" },
+        "isCompleted": { "type": "boolean" }
+      },
+      "required": ["userId", "title", "time"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profile and settings"
+    },
+    "activityLogs/{logId}": {
+      "schema": "ActivityLog",
+      "description": "Hourly activity entries"
+    },
+    "goals/{goalId}": {
+      "schema": "Goal",
+      "description": "User productivity goals"
+    },
+    "journals/{journalId}": {
+      "schema": "Journal",
+      "description": "Optional periodic reflections"
+    },
+    "reminders/{reminderId}": {
+      "schema": "Reminder",
+      "description": "Task or study session reminders"
+    }
+  }
+}

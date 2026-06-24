@@ -1,0 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-primary: #2d4f37; /* elegant comforting forest-sage green */
+  --color-primary-light: #edf2ee; /* ultra comforting light sage tint */
+  --color-surface: #ffffff;
+  --color-background: #f4f2ec; /* beautiful warm alabaster/linen paper (gentle on eyes) */
+  --color-border: #e2ded7; /* soft warm stone gray */
+  --color-text-main: #232824; /* soft dark olive-charcoal, far less harsh than solid black */
+  --color-text-muted: #5f6861; /* eye-comforting muted green-gray */
+}
+
+@layer base {
+  body {
+    @apply bg-background text-text-main font-sans antialiased selection:bg-primary/20;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-sans font-bold tracking-tight;
+  }
+}
+
+.timeline-line {
+  @apply absolute left-12 top-0 bottom-0 w-px bg-border;
+}
+
+.card-slate {
+  @apply bg-surface border border-border rounded-xl shadow-sm overflow-hidden;
+}
+
+.nav-active {
+  @apply bg-primary-light text-primary font-medium;
+}
+
+.nav-inactive {
+  @apply text-text-muted hover:bg-slate-100 hover:text-text-main;
+}
