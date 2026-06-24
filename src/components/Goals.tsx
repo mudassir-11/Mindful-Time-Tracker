@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
-import { UserProfile, Goal } from '../types';
+import { User } from '@supabase/supabase-js';
+import { UserProfile, Goal, ActivityLog } from '../types';
 import { databaseService } from '../services/databaseService';
+import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { Target, Plus, Trash2, Check, TrendingUp } from 'lucide-react';
 
 interface GoalsProps {
   user: User;
   profile: UserProfile | null;
+  refreshTrigger?: number;
 }
 
-export default function Goals({ user, profile }: GoalsProps) {
+export default function Goals({ user, profile, refreshTrigger = 0 }: GoalsProps) {
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [newGoal, setNewGoal] = useState({
     categoryId: '',
@@ -21,18 +24,28 @@ export default function Goals({ user, profile }: GoalsProps) {
   });
 
   useEffect(() => {
-    const unsubscribe = databaseService.subscribeToGoals(user.uid, (newGoals) => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    
+    const unsubscribeGoals = databaseService.subscribeToGoals(user.id, (newGoals) => {
       setGoals(newGoals);
     });
-    return () => unsubscribe();
-  }, [user.uid]);
+    
+    const unsubscribeLogs = databaseService.subscribeToLogs(user.id, todayStr, (newLogs) => {
+      setLogs(newLogs);
+    });
+    
+    return () => {
+      unsubscribeGoals();
+      unsubscribeLogs();
+    };
+  }, [user.id, refreshTrigger]);
 
   const handleAddGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGoal.categoryId) return;
 
     await databaseService.saveGoal({
-      userId: user.uid,
+      userId: user.id,
       categoryId: newGoal.categoryId,
       targetHoursPerDay: newGoal.targetHoursPerDay,
       specificObjectives: newGoal.specificObjectives,
@@ -43,9 +56,17 @@ export default function Goals({ user, profile }: GoalsProps) {
     setNewGoal({
       categoryId: '',
       targetHoursPerDay: 2,
-      specificObjectives: '',
       isActive: true
     });
+
+    const updatedGoals = await databaseService.getGoals(user.id);
+    setGoals(updatedGoals);
+  };
+
+  const handleDeleteGoal = async (goalId: string) => {
+    await databaseService.deleteGoal(goalId);
+    const updatedGoals = await databaseService.getGoals(user.id);
+    setGoals(updatedGoals);
   };
 
   return (
@@ -94,7 +115,7 @@ export default function Goals({ user, profile }: GoalsProps) {
                     <input 
                       type="number"
                       step="0.5"
-                      min="0.1"
+                      min="0.5"
                       max="24"
                       value={newGoal.targetHoursPerDay}
                       onChange={(e) => setNewGoal({...newGoal, targetHoursPerDay: parseFloat(e.target.value)})}
@@ -148,6 +169,10 @@ export default function Goals({ user, profile }: GoalsProps) {
         ) : (
           goals.map(goal => {
             const category = profile?.categories.find(c => c.id === goal.categoryId);
+            const categoryLogs = logs.filter(l => l.categoryId === goal.categoryId);
+            const loggedHrs = categoryLogs.reduce((sum, l) => sum + ((l.durationMinutes || 60) / 60), 0);
+            const progressPercent = Math.min(100, Math.round((loggedHrs / goal.targetHoursPerDay) * 100));
+
             return (
               <motion.div 
                 key={goal.id}
@@ -169,18 +194,24 @@ export default function Goals({ user, profile }: GoalsProps) {
                     <p className="text-text-muted italic leading-relaxed text-[11px] sm:text-sm truncate sm:whitespace-normal">
                       {goal.specificObjectives || "Keep consistently working towards your daily target."}
                     </p>
-                    {/* Goal Progress Mockup */}
-                    <div className="w-full bg-slate-100 rounded-full h-1.5 sm:h-2 mt-2 sm:mt-4 relative overflow-hidden">
-                      <div 
-                        className="h-1.5 sm:h-2 rounded-full transition-all duration-1000" 
-                        style={{ width: '65%', backgroundColor: category?.color || '#4f46e5' }}
-                      />
+                    {/* Goal Progress */}
+                    <div className="mt-2 sm:mt-4">
+                      <div className="flex justify-between items-end mb-1">
+                        <span className="text-[9px] sm:text-[10px] font-bold text-text-muted uppercase tracking-wider">{loggedHrs.toFixed(1)}h logged</span>
+                        <span className="text-[9px] sm:text-[10px] font-bold text-text-muted">{progressPercent}%</span>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-1.5 sm:h-2 relative overflow-hidden">
+                        <div 
+                          className="h-1.5 sm:h-2 rounded-full transition-all duration-1000" 
+                          style={{ width: `${progressPercent}%`, backgroundColor: category?.color || '#4f46e5' }}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
                 <div className="opacity-100 sm:opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 flex-shrink-0">
                   <button 
-                    onClick={() => databaseService.deleteGoal(goal.id)}
+                    onClick={() => handleDeleteGoal(goal.id)}
                     className="p-2 sm:p-3 text-text-muted hover:text-red-500 hover:bg-red-50/50 rounded-xl transition-all"
                     title="Delete Intention"
                   >

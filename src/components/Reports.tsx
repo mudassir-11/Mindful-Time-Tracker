@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
+import { User } from '@supabase/supabase-js';
 import { UserProfile, ActivityLog, Goal } from '../types';
 import { databaseService } from '../services/databaseService';
 import { 
@@ -7,16 +7,16 @@ import {
   PieChart, Pie, Cell, Legend 
 } from 'recharts';
 import { format, startOfWeek, endOfWeek, eachDayOfInterval, subDays } from 'date-fns';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { supabase } from '../lib/supabase';
 import { Activity, PieChart as PieChartIcon, BarChart2, TrendingUp } from 'lucide-react';
 
 interface ReportsProps {
   user: User;
   profile: UserProfile | null;
+  refreshTrigger?: number;
 }
 
-export default function Reports({ user, profile }: ReportsProps) {
+export default function Reports({ user, profile, refreshTrigger = 0 }: ReportsProps) {
   const [weeklyData, setWeeklyData] = useState<any[]>([]);
   const [categoryData, setCategoryData] = useState<any[]>([]);
   const [weeklyTarget, setWeeklyTarget] = useState(21);
@@ -32,32 +32,30 @@ export default function Reports({ user, profile }: ReportsProps) {
         const startStr = format(lastWeek, 'yyyy-MM-dd');
         const endStr = format(today, 'yyyy-MM-dd');
 
-        // Fetch all logs and goals for the user in parallel
-        const logsQuery = query(
-          collection(db, 'activityLogs'),
-          where('userId', '==', user.uid)
-        );
-        const goalsQuery = query(
-          collection(db, 'goals'),
-          where('userId', '==', user.uid)
-        );
-
-        const [logsSnapshot, goalsSnapshot] = await Promise.all([
-          getDocs(logsQuery),
-          getDocs(goalsQuery)
+        // Fetch all logs and goals for the user in parallel using Supabase
+        const [{ data: logsData }, { data: goalsData }] = await Promise.all([
+          supabase.from('activity_logs').select('*').eq('user_id', user.id),
+          supabase.from('goals').select('*').eq('user_id', user.id)
         ]);
 
-        const allLogs = logsSnapshot.docs.map(doc => doc.data() as ActivityLog);
-        // Client-side filter to avoid requiring a composite index in Firestore
+        const allLogs: ActivityLog[] = (logsData || []).map((d: any) => ({
+          id: d.id, userId: d.user_id, date: d.date, hour: d.hour, activity: d.activity, 
+          categoryId: d.category_id, durationMinutes: d.duration_minutes, createdAt: d.created_at
+        }));
+        
+        // Client-side filter to avoid complex queries
         const logs = allLogs.filter(l => l.date >= startStr && l.date <= endStr);
         setHasData(logs.length > 0);
 
-        const goals = goalsSnapshot.docs.map(doc => doc.data() as Goal);
+        const goals: Goal[] = (goalsData || []).map((d: any) => ({
+          id: d.id, userId: d.user_id, categoryId: d.category_id, targetHoursPerDay: d.target_hours_per_day, 
+          specificObjectives: d.specific_objectives, isActive: d.is_active
+        }));
 
         // Calculate dynamic weekly target based on active goals
         const calculatedTarget = goals.length > 0
           ? goals.reduce((sum, g) => sum + (g.targetHoursPerDay * 7), 0)
-          : 21; // default to 21 hours/week (3 hours/day)
+          : 0; // 0 means no goals set
         setWeeklyTarget(calculatedTarget);
 
         // Process Daily Bar Chart Data
@@ -86,8 +84,10 @@ export default function Reports({ user, profile }: ReportsProps) {
         }).filter(c => c.value > 0);
         setCategoryData(categoryDistribution);
 
-        const totalHrs = logs.reduce((sum, l) => sum + ((l.durationMinutes ?? 60) / 60), 0);
-        setTotalHours(Number(totalHrs.toFixed(1)));
+        // Total Focused Hours (excluding leisure)
+        const focusLogs = logs.filter(l => l.categoryId !== 'leisure');
+        const calculatedTotalHours = focusLogs.reduce((sum, l) => sum + ((l.durationMinutes ?? 60) / 60), 0);
+        setTotalHours(Number(calculatedTotalHours.toFixed(1)));
 
       } catch (err) {
         console.error("Error loading analytics data:", err);
@@ -97,7 +97,7 @@ export default function Reports({ user, profile }: ReportsProps) {
     }
 
     fetchData();
-  }, [user.uid, profile]);
+  }, [user.id, profile, refreshTrigger]);
 
   if (loading) {
     return (
@@ -232,10 +232,10 @@ export default function Reports({ user, profile }: ReportsProps) {
             <p className="text-[9px] sm:text-[10px] uppercase font-bold text-text-muted tracking-widest">Efficiency Index</p>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl sm:text-5xl font-bold text-emerald-600">
-                {weeklyTarget > 0 ? Math.min(100, Math.round((totalHours / weeklyTarget) * 100)) : 0}%
+                {weeklyTarget > 0 ? Math.min(100, Math.round((totalHours / weeklyTarget) * 100)) : '--'}%
               </span>
               <p className="text-[10px] sm:text-xs text-text-muted font-medium">
-                vs {weeklyTarget}h Goal
+                {weeklyTarget > 0 ? `vs ${weeklyTarget}h Goal` : 'No Goal Set'}
               </p>
             </div>
           </div>

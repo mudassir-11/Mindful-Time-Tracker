@@ -1,79 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
-import { UserProfile, ActivityLog, Reminder } from '../types';
+import { User } from '@supabase/supabase-js';
+import { UserProfile, ActivityLog } from '../types';
 import { databaseService } from '../services/databaseService';
 import { format, addDays, subDays } from 'date-fns';
-import { ChevronLeft, ChevronRight, Download, Plus, Check, Bell, X, CheckSquare, Square, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { collection, query, where, orderBy, onSnapshot, setDoc, doc, Timestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 
 interface TimelineProps {
   user: User;
   profile: UserProfile | null;
   date: Date;
   onDateChange: (date: Date) => void;
+  refreshTrigger?: number;
 }
 
-export default function Timeline({ user, profile, date, onDateChange }: TimelineProps) {
+export default function Timeline({ user, profile, date, onDateChange, refreshTrigger = 0 }: TimelineProps) {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [editingHour, setEditingHour] = useState<number | null>(null);
   const [activityInput, setActivityInput] = useState('');
   const [categoryIdInput, setCategoryIdInput] = useState('');
-  const [showReminders, setShowReminders] = useState(false);
-  const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [isAddingReminder, setIsAddingReminder] = useState(false);
-  const [newReminderTitle, setNewReminderTitle] = useState('');
 
   const dateStr = format(date, 'yyyy-MM-dd');
 
   useEffect(() => {
-    const unsubscribe = databaseService.subscribeToLogs(user.uid, dateStr, (newLogs) => {
+    const unsubscribe = databaseService.subscribeToLogs(user.id, dateStr, (newLogs) => {
       setLogs(newLogs);
     });
     return () => unsubscribe();
-  }, [user.uid, dateStr]);
-
-  // Ideally this would be a separate subscriber in databaseService, adding it here for simplicity
-  useEffect(() => {
-    const q = query(
-      collection(db, 'reminders'),
-      where('userId', '==', user.uid),
-      orderBy('time', 'asc')
-    );
-    const unsub = onSnapshot(q, (snapshot) => {
-      setReminders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Reminder)));
-    });
-    return () => unsub();
-  }, [user.uid]);
-
-  const handleAddReminder = async () => {
-    if (!newReminderTitle.trim()) return;
-    
-    await setDoc(doc(collection(db, 'reminders')), {
-      userId: user.uid,
-      title: newReminderTitle.trim(),
-      time: Timestamp.fromDate(new Date()),
-      isCompleted: false
-    });
-
-    setNewReminderTitle('');
-    setIsAddingReminder(false);
-  };
-
-  const handleDeleteReminder = async (id: string) => {
-    await databaseService.deleteReminder(id);
-  };
+  }, [user.id, dateStr, refreshTrigger]);
 
   const handleDeleteLog = async (hour: number) => {
-    const logId = `${user.uid}_${dateStr}_${hour}`;
+    const logId = `${user.id}_${dateStr}_${hour}`;
     await databaseService.deleteLog(logId);
     setEditingHour(null);
     setActivityInput('');
-  };
-
-  const toggleReminder = async (rem: Reminder) => {
-    await setDoc(doc(db, 'reminders', rem.id), { ...rem, isCompleted: !rem.isCompleted });
   };
 
   const handleSaveLog = async (hour: number) => {
@@ -83,7 +43,7 @@ export default function Timeline({ user, profile, date, onDateChange }: Timeline
     }
 
     await databaseService.saveLog({
-      userId: user.uid,
+      userId: user.id,
       date: dateStr,
       hour,
       activity: activityInput,
@@ -107,157 +67,107 @@ export default function Timeline({ user, profile, date, onDateChange }: Timeline
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
 
+  const loggedHrs = logs.reduce((sum, l) => sum + ((l.durationMinutes || 60) / 60), 0);
+  const focusHrs = logs.filter(l => l.categoryId !== 'leisure').reduce((sum, l) => sum + ((l.durationMinutes || 60) / 60), 0);
+  
+  const categoryHrs = logs.reduce((acc, log) => {
+    acc[log.categoryId] = (acc[log.categoryId] || 0) + ((log.durationMinutes || 60) / 60);
+    return acc;
+  }, {} as Record<string, number>);
+  
+  const topCategoryId = Object.keys(categoryHrs).sort((a, b) => categoryHrs[b] - categoryHrs[a])[0];
+  const topCategory = profile?.categories.find(c => c.id === topCategoryId);
+  const topCategoryHrs = topCategoryId ? categoryHrs[topCategoryId] : 0;
+
   return (
-    <div className="space-y-4 sm:space-y-8">
+    <div className="space-y-6 sm:space-y-8">
       {/* Activity Summary Cards (Match Design) */}
-      <div className="grid grid-cols-3 gap-2 sm:gap-4">
-        <div className="card-slate p-2.5 sm:p-5 text-center sm:text-left">
-          <p className="text-text-muted text-[9px] sm:text-xs font-bold uppercase tracking-wider">Logged</p>
-          <h2 className="text-lg sm:text-3xl font-bold text-text-main mt-0.5 sm:mt-1">
-            {logs.length}<span className="text-xs sm:text-lg font-normal text-slate-400 ml-0.5 sm:ml-1">hrs</span>
+      <div className="hidden sm:grid grid-cols-3 gap-3 sm:gap-4">
+        <div className="card-slate p-3 sm:p-5 text-center sm:text-left flex flex-col justify-center">
+          <p className="text-text-muted text-[10px] sm:text-xs font-bold uppercase tracking-wider">Logged</p>
+          <h2 className="text-xl sm:text-3xl font-bold text-text-main mt-1 sm:mt-1">
+            {loggedHrs.toFixed(1)}<span className="text-[11px] sm:text-lg font-normal text-slate-400 ml-1 sm:ml-1">hrs</span>
           </h2>
         </div>
-        <div className="card-slate p-2.5 sm:p-5 text-center sm:text-left">
-          <p className="text-text-muted text-[9px] sm:text-xs font-bold uppercase tracking-wider">Focus</p>
-          <h2 className="text-lg sm:text-3xl font-bold text-emerald-600 mt-0.5 sm:mt-1">
-            {logs.length > 0 ? Math.round((logs.length / 12) * 100) : 0}<span className="text-xs sm:text-lg font-normal text-slate-400 ml-0.5 sm:ml-1">%</span>
+        <div className="card-slate p-3 sm:p-5 text-center sm:text-left flex flex-col justify-center">
+          <p className="text-text-muted text-[10px] sm:text-xs font-bold uppercase tracking-wider">Focus</p>
+          <h2 className="text-xl sm:text-3xl font-bold text-emerald-600 mt-1 sm:mt-1">
+            {Math.min(100, Math.round((focusHrs / 8) * 100))}<span className="text-[11px] sm:text-lg font-normal text-slate-400 ml-1 sm:ml-1">%</span>
           </h2>
         </div>
-        <div className="card-slate p-2.5 sm:p-5 text-center sm:text-left">
-          <p className="text-text-muted text-[9px] sm:text-xs font-bold uppercase tracking-wider">Intent</p>
-          <h2 className="text-lg sm:text-3xl font-bold text-primary mt-0.5 sm:mt-1">
-            {logs.filter(l => l.categoryId === 'learning').length}<span className="text-xs sm:text-lg font-normal text-slate-400 ml-0.5 sm:ml-1">/ 2h</span>
+        <div className="card-slate p-3 sm:p-5 text-center sm:text-left overflow-hidden flex flex-col justify-center">
+          <p className="text-text-muted text-[10px] sm:text-xs font-bold uppercase tracking-wider truncate" style={{ color: topCategory?.color || 'inherit' }}>
+            {topCategory?.label || 'Top Area'}
+          </p>
+          <h2 className="text-xl sm:text-3xl font-bold text-primary mt-1 sm:mt-1" style={{ color: topCategory?.color || 'inherit' }}>
+            {topCategoryHrs > 0 ? topCategoryHrs.toFixed(1) : 0}<span className="text-[11px] sm:text-lg font-normal text-slate-400 ml-1 sm:ml-1">hrs</span>
           </h2>
         </div>
       </div>
 
       {/* Timeline Controls */}
-      <div className="flex items-center justify-between pb-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <button onClick={() => onDateChange(subDays(date, 1))} className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors border border-border">
-            <ChevronLeft className="w-4 h-4 text-text-muted" />
-          </button>
-          <span className="text-sm font-bold text-text-main px-2">
-            {format(date, 'MMMM d, yyyy')}
-          </span>
-          <button onClick={() => onDateChange(addDays(date, 1))} className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors border border-border">
-            <ChevronRight className="w-4 h-4 text-text-muted" />
-          </button>
-        </div>
-        
-        <div className="flex gap-2">
-          <div className="relative">
-            <button 
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                showReminders ? 'bg-primary text-white' : 'text-text-muted border border-border hover:bg-slate-50'
-              }`}
-              onClick={() => setShowReminders(!showReminders)}
-            >
-              <Bell className="w-3.5 h-3.5" />
-              Reminders
-              {reminders.filter(r => !r.isCompleted).length > 0 && <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />}
-            </button>
-            <AnimatePresence>
-              {showReminders && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute right-0 mt-2 w-72 card-slate p-5 shadow-2xl z-50 ring-1 ring-black/5"
-                >
-                  <div className="flex items-center justify-between mb-4 pb-2 border-b border-border">
-                    {isAddingReminder ? (
-                      <div className="flex items-center gap-2 w-full">
-                        <input
-                          type="text"
-                          value={newReminderTitle}
-                          onChange={(e) => setNewReminderTitle(e.target.value)}
-                          placeholder="What to remind?"
-                          className="flex-1 bg-slate-50 border border-border rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-primary/20"
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleAddReminder();
-                          }}
-                          autoFocus
-                        />
-                        <button onClick={handleAddReminder} className="p-1 text-emerald-600 hover:bg-slate-100 rounded-md">
-                          <Check className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => setIsAddingReminder(false)} className="p-1 text-red-500 hover:bg-slate-100 rounded-md">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Active Reminders</h4>
-                        <button onClick={() => setIsAddingReminder(true)} className="p-1 hover:bg-slate-100 rounded-md" title="Add reminder">
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                    {reminders.length === 0 && <p className="text-[10px] text-text-muted italic py-4 text-center">No reminders set.</p>}
-                    {reminders.map(rem => (
-                      <div key={rem.id} className="flex items-center gap-3 group px-1 justify-between">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <button onClick={() => toggleReminder(rem)} className="text-text-muted hover:text-primary transition-colors flex-shrink-0">
-                            {rem.isCompleted ? <CheckSquare className="w-4 h-4 text-emerald-500" /> : <Square className="w-4 h-4" />}
-                          </button>
-                          <span className={`text-xs font-medium truncate ${rem.isCompleted ? 'line-through text-text-muted opacity-50' : 'text-text-main'}`}>
-                            {rem.title}
-                          </span>
-                        </div>
-                        <button 
-                          onClick={() => handleDeleteReminder(rem.id)} 
-                          className="text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 rounded"
-                          title="Delete reminder"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-          <button 
-            onClick={handleExport}
-            className="flex items-center gap-2 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold text-text-muted hover:bg-slate-50 transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Export Data
-          </button>
-        </div>
+      <div className="flex items-center justify-end pb-4 border-b border-border">
+        <button 
+          onClick={handleExport}
+          className="hidden sm:flex items-center gap-2 px-3 py-1.5 border border-border rounded-lg text-xs font-semibold text-text-muted hover:bg-slate-50 transition-colors"
+        >
+          <Download className="w-3.5 h-3.5" />
+          Export Data
+        </button>
       </div>
 
       {/* Hourly Log Section (Timeline Match) */}
       <div className="card-slate">
-        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-border bg-slate-50/50 flex justify-between items-center">
-          <h3 className="text-xs sm:text-sm font-bold text-text-main">Activity Timeline</h3>
-          <span className="text-[9px] sm:text-[10px] text-text-muted uppercase tracking-widest">Scroll to view</span>
+        <div className="px-4 sm:px-6 py-4 border-b border-border bg-slate-50/50 flex justify-between items-center">
+          <h3 className="text-sm sm:text-base font-bold text-text-main">Activity Timeline</h3>
+          <span className="text-[10px] text-text-muted uppercase tracking-widest font-semibold">Scroll to view</span>
         </div>
         
-        <div className="p-3 sm:p-6 space-y-3 sm:space-y-4 max-h-[480px] sm:max-h-[600px] overflow-y-auto custom-scrollbar">
+        <div className="p-3 sm:p-6 space-y-4">
           {hours.map((hour) => {
             const log = logs.find(l => l.hour === hour);
             const isEditing = editingHour === hour;
             const category = profile?.categories.find(c => c.id === log?.categoryId);
+            
+            // Check if this hour is covered by a multi-hour log from an earlier hour
+            const overlappingLog = logs.find(l => l.hour < hour && l.hour + Math.max(1, Math.round((l.durationMinutes || 60) / 60)) > hour);
+
+            const formatDuration = (mins: number) => {
+              const h = Math.floor(mins / 60);
+              const m = mins % 60;
+              return `${h > 0 ? `${h}h ` : ''}${m > 0 ? `${m}m` : ''}`.trim() || '60m';
+            };
+
+            if (!log && !isEditing && overlappingLog) {
+              const overlapCategory = profile?.categories.find(c => c.id === overlappingLog.categoryId);
+              return (
+                <div key={hour} className="flex gap-4 sm:gap-6 group relative opacity-60">
+                  <div className="w-14 sm:w-16 text-right pt-2.5">
+                    <span className="text-[10px] sm:text-[11px] font-mono font-bold text-text-muted uppercase tracking-tighter">
+                      {format(new Date().setHours(hour, 0), 'HH:mm')}
+                    </span>
+                  </div>
+                  <div className="flex-1 flex items-center min-h-[3rem] sm:min-h-[3.5rem] pl-4 border-l-4" style={{ borderColor: `${overlapCategory?.color}40` }}>
+                    <span className="text-[11px] sm:text-xs text-text-muted italic font-medium">Continued ({overlappingLog.activity})</span>
+                  </div>
+                </div>
+              );
+            }
 
             return (
-              <div key={hour} className="flex gap-3 sm:gap-6 group relative">
+              <div key={hour} className="flex gap-4 sm:gap-6 group relative">
                 {/* Time Indicator */}
-                <div className="w-11 sm:w-16 text-right pt-2 sm:pt-2.5">
-                  <span className="text-[9px] sm:text-[10px] font-mono font-bold text-text-muted uppercase tracking-tighter">
+                <div className="w-14 sm:w-16 text-right pt-2 sm:pt-2.5">
+                  <span className="text-[11px] sm:text-[12px] font-mono font-bold text-text-muted uppercase tracking-tighter">
                     {format(new Date().setHours(hour, 0), 'HH:mm')}
                   </span>
-                  <div className="text-[8px] sm:text-[9px] text-slate-400 font-medium uppercase mt-0.5">
+                  <div className="text-[9px] sm:text-[10px] text-slate-400 font-bold uppercase mt-0.5 tracking-wider">
                     {format(new Date().setHours(hour, 0), 'hh aa')}
                   </div>
                 </div>
 
                 {/* Entry Card */}
-                <div className="flex-1 min-h-[3rem] sm:min-h-[4rem]">
+                <div className="flex-1 min-h-[3.5rem] sm:min-h-[4rem]">
                   <AnimatePresence mode="wait">
                     {isEditing ? (
                       <motion.div 
@@ -266,45 +176,42 @@ export default function Timeline({ user, profile, date, onDateChange }: Timeline
                         exit={{ opacity: 0, scale: 0.98 }}
                         className="p-4 bg-white border border-primary/20 rounded-xl shadow-lg ring-4 ring-primary/5"
                       >
-                        <textarea
+                        <input
                           autoFocus
+                          type="text"
                           value={activityInput}
                           onChange={(e) => setActivityInput(e.target.value)}
-                          placeholder="What did you achieve during this hour?"
-                          className="w-full bg-transparent border-none focus:ring-0 resize-none text-text-main placeholder:text-text-muted/40 font-medium text-sm leading-relaxed mb-4"
-                          rows={2}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveLog(hour);
+                            if (e.key === 'Escape') setEditingHour(null);
+                          }}
+                          placeholder={`What did you achieve during this hour?`}
+                          className="w-full bg-white border border-border rounded-lg px-3 sm:px-4 py-2 sm:py-2.5 text-sm outline-none focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 mb-2 sm:mb-3"
                         />
-                        <div className="flex items-center justify-between gap-4 pt-4 border-t border-slate-100">
+                        <div className="flex flex-row justify-between gap-2">
                           <select 
                             value={categoryIdInput}
                             onChange={(e) => setCategoryIdInput(e.target.value)}
-                            className="bg-slate-50 border border-border rounded-lg px-3 py-1.5 text-xs font-semibold focus:ring-2 focus:ring-primary/10 transition-all outline-none"
+                            className="bg-white border border-border rounded-lg px-2 sm:px-3 py-2 text-xs sm:text-sm outline-none focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20 flex-1 min-w-0"
                           >
                             {profile?.categories.map(c => (
                               <option key={c.id} value={c.id}>{c.label}</option>
                             ))}
                           </select>
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-shrink-0">
                             {log && (
                               <button 
                                 onClick={() => handleDeleteLog(hour)}
-                                className="px-3 py-1.5 text-xs font-bold text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
+                                className="px-3 sm:px-4 py-2 text-xs font-bold text-red-500 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-200 bg-white"
                               >
                                 Clear
                               </button>
                             )}
-                            <button 
-                              onClick={() => setEditingHour(null)}
-                              className="px-3 py-1.5 text-xs font-bold text-text-muted hover:text-text-main transition-colors"
-                            >
+                            <button onClick={() => setEditingHour(null)} className="px-2 sm:px-4 py-2 text-xs font-semibold text-text-muted hover:bg-slate-100 rounded-lg transition-colors border border-border bg-white">
                               Cancel
                             </button>
-                            <button 
-                              onClick={() => handleSaveLog(hour)}
-                              className="px-4 py-1.5 bg-primary text-white rounded-lg text-xs font-bold flex items-center gap-2 hover:opacity-90 active:scale-95 transition-all shadow-sm shadow-primary/20"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              Log Hour
+                            <button onClick={() => handleSaveLog(hour)} className="px-3 sm:px-4 py-2 text-xs font-bold text-white bg-primary rounded-lg hover:opacity-90 transition-opacity shadow-sm shadow-primary/20">
+                              Save
                             </button>
                           </div>
                         </div>
@@ -316,7 +223,7 @@ export default function Timeline({ user, profile, date, onDateChange }: Timeline
                           setActivityInput(log.activity);
                           setCategoryIdInput(log.categoryId);
                         }}
-                        className="cursor-pointer p-3 sm:p-4 rounded-xl border-l-[5px] sm:border-l-[6px] transition-all hover:translate-x-1 group"
+                        className="cursor-pointer p-3.5 sm:p-4 rounded-xl border-l-[6px] transition-all hover:translate-x-1 group"
                         style={{ 
                           backgroundColor: `${category?.color}10`, // 10% opacity
                           borderLeftColor: category?.color || '#ccc' 
@@ -324,17 +231,19 @@ export default function Timeline({ user, profile, date, onDateChange }: Timeline
                       >
                         <div className="flex justify-between items-start gap-2">
                           <div className="space-y-1 min-w-0">
-                            <p className="text-xs sm:text-sm font-bold text-text-main leading-snug break-words">
+                            <p className="text-sm font-bold text-text-main leading-snug break-words">
                               {log.activity}
                             </p>
                             <span 
-                              className="inline-block px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-bold uppercase tracking-widest"
+                              className="inline-block px-2 py-0.5 rounded-md text-[9px] sm:text-[10px] font-bold uppercase tracking-widest"
                               style={{ backgroundColor: `${category?.color}30`, color: category?.color }}
                             >
                               {category?.label}
                             </span>
                           </div>
-                          <span className="text-[9px] sm:text-[10px] bg-white/50 px-1.5 py-0.5 rounded-md font-bold text-text-muted border border-white/20 whitespace-nowrap">60 min</span>
+                          <span className="text-[10px] sm:text-[11px] bg-white/50 px-2 py-0.5 rounded-md font-bold text-text-muted border border-white/20 whitespace-nowrap shadow-sm">
+                            {formatDuration(log.durationMinutes || 60)}
+                          </span>
                         </div>
                       </div>
                     ) : (
@@ -344,9 +253,9 @@ export default function Timeline({ user, profile, date, onDateChange }: Timeline
                           setActivityInput('');
                           setCategoryIdInput(profile?.categories[0].id || '');
                         }}
-                        className="w-full text-left py-2.5 px-3 bg-slate-50/40 border border-dashed border-border/80 hover:border-primary/30 rounded-xl transition-all hover:bg-slate-50 flex items-center min-h-[2.8rem] sm:min-h-[3.5rem] touch-manipulation"
+                        className="w-full text-left py-3 px-4 bg-slate-50/40 border border-dashed border-border/80 hover:border-primary/30 rounded-xl transition-all hover:bg-slate-50 flex items-center min-h-[3.5rem] touch-manipulation"
                       >
-                        <p className="text-text-muted/40 font-medium text-[10px] sm:text-sm italic">
+                        <p className="text-text-muted/50 font-semibold text-[11px] sm:text-sm italic">
                            Tap to log activity for {format(new Date().setHours(hour, 0), 'hh aa')}...
                         </p>
                       </button>

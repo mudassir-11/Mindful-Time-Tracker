@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
+import { User } from '@supabase/supabase-js';
 import { UserProfile } from '../types';
-import { databaseService } from '../services/databaseService';
+import { databaseService, DEFAULT_CATEGORIES } from '../services/databaseService';
 import { X, Clock, Calendar, Tag, FileText, Check } from 'lucide-react';
 import { motion } from 'motion/react';
-import { format, parse, differenceInMinutes, isValid } from 'date-fns';
+import { format, parse, differenceInMinutes, isValid, addDays } from 'date-fns';
 
 interface LogActivityModalProps {
   isOpen: boolean;
@@ -36,12 +36,14 @@ export default function LogActivityModal({
     setDateStr(format(initialDate, 'yyyy-MM-dd'));
   }, [initialDate, isOpen]);
 
+  const activeCategories = profile?.categories?.length ? profile.categories : DEFAULT_CATEGORIES;
+
   // Set default category
   useEffect(() => {
-    if (profile?.categories && profile.categories.length > 0 && !categoryId) {
-      setCategoryId(profile.categories[0].id);
+    if (activeCategories.length > 0 && !categoryId) {
+      setCategoryId(activeCategories[0].id);
     }
-  }, [profile, categoryId]);
+  }, [activeCategories, categoryId]);
 
   if (!isOpen) return null;
 
@@ -71,9 +73,16 @@ export default function LogActivityModal({
 
       let duration = differenceInMinutes(parsedEnd, parsedStart);
       
+      // Auto-correct 12-hour wrap around for mobile keyboards
+      // If start is 10:00 and end is 01:00, user likely meant 13:00 (1 PM)
+      if (duration < 0 && parsedStart.getHours() >= 6 && parsedEnd.getHours() < 12) {
+        parsedEnd.setHours(parsedEnd.getHours() + 12);
+        duration = differenceInMinutes(parsedEnd, parsedStart);
+      }
+      
       // Handle overnight or negative duration
       if (duration < 0) {
-        setError('End time must be after start time.');
+        setError('End time must be after start time. (For overnight activities, please split them at midnight).');
         return;
       }
 
@@ -87,7 +96,7 @@ export default function LogActivityModal({
       const startHour = parsedStart.getHours();
 
       await databaseService.saveLog({
-        userId: user.uid,
+        userId: user.id,
         date: dateStr,
         hour: startHour,
         activity: description.trim(),
@@ -107,13 +116,20 @@ export default function LogActivityModal({
     }
   };
 
+
+
   // Calculate duration in real-time for feedback
   const getDurationFeedback = () => {
     try {
       const parsedStart = parse(startTime, 'HH:mm', new Date());
       const parsedEnd = parse(endTime, 'HH:mm', new Date());
       if (isValid(parsedStart) && isValid(parsedEnd)) {
-        const diff = differenceInMinutes(parsedEnd, parsedStart);
+        let diff = differenceInMinutes(parsedEnd, parsedStart);
+        
+        if (diff < 0 && parsedStart.getHours() >= 6 && parsedEnd.getHours() < 12) {
+           diff = differenceInMinutes(addDays(parsedEnd, 0).setHours(parsedEnd.getHours() + 12), parsedStart);
+        }
+        
         if (diff > 0) {
           const hours = Math.floor(diff / 60);
           const mins = diff % 60;
@@ -191,26 +207,98 @@ export default function LogActivityModal({
               <label className="text-[10px] uppercase font-bold tracking-widest text-text-muted flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-text-muted" /> Start Time
               </label>
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                className="w-full bg-slate-50 border border-border rounded-xl px-4 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 transition-all cursor-pointer"
-                required
-              />
+              <div className="flex items-center gap-1">
+                <select 
+                  value={(() => {
+                    const h = parseInt(startTime.split(':')[0], 10);
+                    if (h === 0) return 12;
+                    if (h > 12) return h - 12;
+                    return h;
+                  })()}
+                  onChange={(e) => {
+                    const newHour12 = parseInt(e.target.value, 10);
+                    const isPM = parseInt(startTime.split(':')[0], 10) >= 12;
+                    let newHour24 = newHour12;
+                    if (isPM && newHour12 < 12) newHour24 += 12;
+                    if (!isPM && newHour12 === 12) newHour24 = 0;
+                    setStartTime(`${newHour24.toString().padStart(2, '0')}:${startTime.split(':')[1]}`);
+                  }}
+                  className="flex-1 bg-slate-50 border border-border rounded-xl px-2 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 appearance-none text-center cursor-pointer"
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+                <span className="font-bold text-text-muted">:</span>
+                <select 
+                  value={startTime.split(':')[1]}
+                  onChange={(e) => setStartTime(`${startTime.split(':')[0]}:${e.target.value}`)}
+                  className="flex-1 bg-slate-50 border border-border rounded-xl px-2 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 appearance-none text-center cursor-pointer"
+                >
+                  {Array.from({ length: 60 }, (_, i) => i.toString().padStart(2, '0')).map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <select 
+                  value={parseInt(startTime.split(':')[0], 10) >= 12 ? 'PM' : 'AM'}
+                  onChange={(e) => {
+                    const isPM = e.target.value === 'PM';
+                    let h = parseInt(startTime.split(':')[0], 10);
+                    if (isPM && h < 12) h += 12;
+                    if (!isPM && h >= 12) h -= 12;
+                    setStartTime(`${h.toString().padStart(2, '0')}:${startTime.split(':')[1]}`);
+                  }}
+                  className="flex-1 bg-slate-50 border border-border rounded-xl px-1 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 appearance-none text-center cursor-pointer"
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </select>
+              </div>
             </div>
 
             <div className="space-y-1.5">
               <label className="text-[10px] uppercase font-bold tracking-widest text-text-muted flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-text-muted" /> End Time
               </label>
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                className="w-full bg-slate-50 border border-border rounded-xl px-4 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 transition-all cursor-pointer"
-                required
-              />
+              <div className="flex items-center gap-1">
+                <select 
+                  value={(() => {
+                    const h = parseInt(endTime.split(':')[0], 10);
+                    if (h === 0) return 12;
+                    if (h > 12) return h - 12;
+                    return h;
+                  })()}
+                  onChange={(e) => {
+                    const newHour12 = parseInt(e.target.value, 10);
+                    const isPM = parseInt(endTime.split(':')[0], 10) >= 12;
+                    let newHour24 = newHour12;
+                    if (isPM && newHour12 < 12) newHour24 += 12;
+                    if (!isPM && newHour12 === 12) newHour24 = 0;
+                    setEndTime(`${newHour24.toString().padStart(2, '0')}:${endTime.split(':')[1]}`);
+                  }}
+                  className="flex-1 bg-slate-50 border border-border rounded-xl px-2 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 appearance-none text-center cursor-pointer"
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+                <span className="font-bold text-text-muted">:</span>
+                <select 
+                  value={endTime.split(':')[1]}
+                  onChange={(e) => setEndTime(`${endTime.split(':')[0]}:${e.target.value}`)}
+                  className="flex-1 bg-slate-50 border border-border rounded-xl px-2 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 appearance-none text-center cursor-pointer"
+                >
+                  {Array.from({ length: 60 }, (_, i) => i.toString().padStart(2, '0')).map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <select 
+                  value={parseInt(endTime.split(':')[0], 10) >= 12 ? 'PM' : 'AM'}
+                  onChange={(e) => {
+                    const isPM = e.target.value === 'PM';
+                    let h = parseInt(endTime.split(':')[0], 10);
+                    if (isPM && h < 12) h += 12;
+                    if (!isPM && h >= 12) h -= 12;
+                    setEndTime(`${h.toString().padStart(2, '0')}:${endTime.split(':')[1]}`);
+                  }}
+                  className="flex-1 bg-slate-50 border border-border rounded-xl px-1 py-3 text-sm font-semibold text-text-main outline-none focus:ring-2 focus:ring-primary/20 appearance-none text-center cursor-pointer"
+                >
+                  <option value="AM">AM</option>
+                  <option value="PM">PM</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -244,7 +332,7 @@ export default function LogActivityModal({
               <Tag className="w-3.5 h-3.5 text-text-muted" /> Target Category
             </label>
             <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto p-0.5">
-              {profile?.categories.map((cat) => {
+              {activeCategories.map((cat) => {
                 const isSelected = categoryId === cat.id;
                 return (
                   <button

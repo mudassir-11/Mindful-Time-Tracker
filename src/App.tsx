@@ -4,14 +4,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  onAuthStateChanged, 
-  User, 
-  signOut 
-} from 'firebase/auth';
-import { auth } from './lib/firebase';
+import { User } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase';
 import { databaseService } from './services/databaseService';
 import { UserProfile } from './types';
 import { motion, AnimatePresence } from 'motion/react';
@@ -27,7 +21,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  Bell
+  Bell,
+  Check
 } from 'lucide-react';
 import { format, addDays, subDays, startOfToday } from 'date-fns';
 
@@ -38,6 +33,7 @@ import Reports from './components/Reports';
 import Journal from './components/Journal';
 import Onboarding from './components/Onboarding';
 import LogActivityModal from './components/LogActivityModal';
+import RemindersWidget from './components/RemindersWidget';
 
 type View = 'timeline' | 'goals' | 'reports' | 'journal' | 'settings';
 
@@ -49,26 +45,92 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(startOfToday());
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showLogModal, setShowLogModal] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [weeklyProgress, setWeeklyProgress] = useState({ label: 'No Data', hrs: 0, target: 0, percent: 0 });
 
   useEffect(() => {
-    return onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        let userProfile = await databaseService.getUserProfile(user.uid);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      handleAuthChange(session?.user ?? null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      handleAuthChange(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !profile) return;
+    
+    const fetchWeeklyProgress = async () => {
+      const today = new Date();
+      const startStr = format(subDays(today, 6), 'yyyy-MM-dd');
+      
+      const { data: logsData } = await supabase.from('activity_logs')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('date', startStr);
+        
+      const { data: goalsData } = await supabase.from('goals')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_active', true);
+
+      if (!logsData || !goalsData || goalsData.length === 0) {
+        // No goals set, calculate total logged across all categories
+        const loggedHrs = (logsData || []).reduce((sum, l) => sum + ((l.duration_minutes || 60) / 60), 0);
+        setWeeklyProgress({ label: 'Total Logged', hrs: Number(loggedHrs.toFixed(1)), target: 0, percent: 0 });
+        return;
+      }
+
+      // Find the goal with the most logged hours or just the first goal
+      const targetGoal = goalsData[0];
+      const category = profile.categories.find(c => c.id === targetGoal.category_id);
+      
+      const categoryLogs = logsData.filter(l => l.category_id === targetGoal.category_id);
+      const loggedHrs = categoryLogs.reduce((sum, l) => sum + ((l.duration_minutes || 60) / 60), 0);
+      const targetHrs = targetGoal.target_hours_per_day * 7;
+      
+      setWeeklyProgress({
+        label: category?.label || 'Goal',
+        hrs: Number(loggedHrs.toFixed(1)),
+        target: targetHrs,
+        percent: Math.min(100, Math.round((loggedHrs / targetHrs) * 100))
+      });
+    };
+    
+    fetchWeeklyProgress();
+  }, [user, profile, refreshTrigger]);
+
+  const handleAuthChange = async (user: User | null) => {
+    setUser(user);
+    if (user) {
+      try {
+        let userProfile = await databaseService.getUserProfile(user.id);
         if (!userProfile) {
-          await databaseService.createUserProfile(user.uid);
-          userProfile = await databaseService.getUserProfile(user.uid);
+          await databaseService.createUserProfile(user.id);
+          userProfile = await databaseService.getUserProfile(user.id);
           setShowOnboarding(true);
         } else if (!userProfile.onboardingComplete) {
           setShowOnboarding(true);
         }
         setProfile(userProfile);
-      } else {
-        setProfile(null);
+      } catch (err) {
+        console.error("Error loading user profile:", err);
+        setLoginError("Could not load your profile. Please check database permissions or try again.");
+        setProfile({ userId: user.id, categories: [], onboardingComplete: true } as UserProfile);
       }
-      setLoading(false);
-    });
-  }, []);
+    } else {
+      setProfile(null);
+    }
+    setLoading(false);
+  };
 
   const handleOnboardingComplete = async () => {
     if (user) {
@@ -77,16 +139,38 @@ export default function App() {
     }
   };
 
-  const handleLogin = async () => {
+  const handleLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!email || !password) {
+      setLoginError('Please enter your email and password.');
+      return;
+    }
     try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
+      setIsLoggingIn(true);
+      setLoginError(null);
+      
+      if (isSignUp) {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) throw error;
+      }
+    } catch (error: any) {
       console.error('Login failed:', error);
+      setLoginError(error.message || 'Authentication failed');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleLogout = () => supabase.auth.signOut();
 
   if (loading) {
     return (
@@ -121,13 +205,48 @@ export default function App() {
               Elevate your daily rhythm with professional time tracking and focused insights.
             </p>
           </div>
-          <button 
-            onClick={handleLogin}
-            className="w-full py-4 px-6 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-opacity flex items-center justify-center gap-3 shadow-md shadow-primary/10"
-          >
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="" />
-            Continue with Google
-          </button>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-3">
+                <input 
+                  type="email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter your email" 
+                  className="w-full px-4 py-3 bg-slate-50 border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary/20 transition-all font-medium"
+                  required
+                />
+                <input 
+                  type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password" 
+                  className="w-full px-4 py-3 bg-slate-50 border border-border rounded-xl outline-none focus:ring-2 focus:ring-primary/20 transition-all font-medium"
+                  required
+                />
+              </div>
+              <button 
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full py-4 px-6 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 shadow-md shadow-primary/10 disabled:opacity-50"
+              >
+                {isLoggingIn ? 'Please wait...' : (isSignUp ? 'Create Account' : 'Sign In')}
+              </button>
+              
+              <div className="text-center pt-2">
+                <button 
+                  type="button"
+                  onClick={() => setIsSignUp(!isSignUp)} 
+                  className="text-text-muted text-sm font-semibold hover:text-primary transition-colors"
+                >
+                  {isSignUp ? 'Already have an account? Sign in' : 'Need an account? Sign up'}
+                </button>
+              </div>
+            </form>
+          {loginError && (
+            <div className="text-sm text-red-500 bg-red-50 p-3 rounded-lg border border-red-100">
+              {loginError}
+            </div>
+          )}
         </motion.div>
       </div>
     );
@@ -152,19 +271,26 @@ export default function App() {
         </nav>
 
         <div className="mt-auto pt-6 border-t border-border space-y-4">
-          {/* Sidebar Widget (Match Design) */}
           <div className="p-4 bg-slate-50 rounded-xl border border-border/50">
             <p className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-2">Weekly Progress</p>
-            <p className="text-xs text-text-main mb-2 font-medium">Learning: 8.5h / 12h</p>
+            <p className="text-xs text-text-main mb-2 font-medium">
+              {weeklyProgress.label}: {weeklyProgress.hrs}h {weeklyProgress.target > 0 ? `/ ${weeklyProgress.target}h` : ''}
+            </p>
             <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-primary h-1.5 rounded-full" style={{ width: '70.8%' }}></div>
+              {weeklyProgress.target > 0 ? (
+                <div className="bg-primary h-1.5 rounded-full transition-all duration-1000" style={{ width: `${weeklyProgress.percent}%` }}></div>
+              ) : (
+                <div className="bg-primary/30 h-1.5 rounded-full transition-all duration-1000 w-full"></div>
+              )}
             </div>
           </div>
 
           <div className="flex items-center gap-3 px-1 py-2">
-            <img src={user.photoURL || ''} className="w-8 h-8 rounded-full border border-border" alt="" referrerPolicy="no-referrer" />
+            {user.user_metadata?.avatar_url && (
+              <img src={user.user_metadata.avatar_url} className="w-8 h-8 rounded-full border border-border" alt="" referrerPolicy="no-referrer" />
+            )}
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate text-text-main">{user.displayName}</p>
+              <p className="text-sm font-semibold truncate text-text-main">{user.user_metadata?.full_name || user.email}</p>
             </div>
           </div>
           <button 
@@ -180,42 +306,38 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* Header (Match Design) */}
-        <header className="h-16 bg-surface border-b border-border px-4 sm:px-6 md:px-12 flex items-center justify-between sticky top-0 z-40">
-          <h2 className="text-sm sm:text-base md:text-lg font-bold text-text-main truncate mr-2">
-            {view === 'timeline' && (
-              <>
-                <span className="hidden md:inline">Daily Dashboard — {format(selectedDate, 'EEEE, MMM d')}</span>
-                <span className="md:hidden">{format(selectedDate, 'EEE, MMM d')}</span>
-              </>
+        <header className="min-h-[4.5rem] py-2 sm:py-0 sm:h-[4.5rem] bg-surface border-b border-border px-3 sm:px-6 md:px-12 flex items-center justify-between sticky top-0 z-40">
+          <div className="flex items-center">
+            {(view === 'timeline' || view === 'journal') ? (
+              <div className="flex items-center gap-0.5 sm:gap-1">
+                <button onClick={() => setSelectedDate(subDays(selectedDate, 1))} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors">
+                  <ChevronLeft className="w-5 h-5 text-text-muted" />
+                </button>
+                <h2 className="text-lg sm:text-xl md:text-2xl font-extrabold tracking-tight text-text-main w-[120px] sm:w-[160px] text-center">
+                  {format(selectedDate, 'MMM d, yyyy')}
+                </h2>
+                <button onClick={() => setSelectedDate(addDays(selectedDate, 1))} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors">
+                  <ChevronRight className="w-5 h-5 text-text-muted" />
+                </button>
+              </div>
+            ) : (
+              <h2 className="text-sm sm:text-base md:text-lg font-bold text-text-main truncate ml-2">
+                {view === 'goals' && "Intentions"}
+                {view === 'reports' && "Analytics"}
+              </h2>
             )}
-            {view === 'goals' && (
-              <>
-                <span className="hidden sm:inline">Intentions & Growth</span>
-                <span className="sm:hidden">Intentions</span>
-              </>
-            )}
-            {view === 'reports' && (
-              <>
-                <span className="hidden sm:inline">Performance Analysis</span>
-                <span className="sm:hidden">Analytics</span>
-              </>
-            )}
-            {view === 'journal' && (
-              <>
-                <span className="hidden sm:inline">Journal — {format(selectedDate, 'MMM d, yyyy')}</span>
-                <span className="sm:hidden">Journal — {format(selectedDate, 'MMM d')}</span>
-              </>
-            )}
-          </h2>
-          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
             <button className="hidden sm:flex px-4 py-1.5 text-sm font-semibold text-text-muted border border-border rounded-lg hover:bg-slate-50 transition-colors">
               Settings
             </button>
+            <RemindersWidget user={user} />
             <button 
               onClick={() => setShowLogModal(true)}
-              className="px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-bold text-white bg-primary rounded-lg shadow-sm shadow-primary/20 hover:opacity-90 transition-opacity"
+              className="px-2.5 sm:px-4 py-2 sm:py-1.5 text-xs sm:text-sm font-bold text-white bg-primary rounded-lg shadow-sm shadow-primary/20 hover:opacity-90 transition-opacity"
             >
-              + Log Activity
+              <span className="hidden sm:inline">+ Log Activity</span>
+              <span className="sm:hidden">+ Log</span>
             </button>
           </div>
         </header>
@@ -235,17 +357,18 @@ export default function App() {
                   user={user} 
                   profile={profile} 
                   date={selectedDate} 
-                  onDateChange={setSelectedDate} 
+                  onDateChange={setSelectedDate}
+                  refreshTrigger={refreshTrigger}
                 />
               )}
               {view === 'goals' && (
-                <Goals user={user} profile={profile} />
+                <Goals user={user} profile={profile} refreshTrigger={refreshTrigger} />
               )}
               {view === 'reports' && (
-                <Reports user={user} profile={profile} />
+                <Reports user={user} profile={profile} refreshTrigger={refreshTrigger} />
               )}
               {view === 'journal' && (
-                <Journal user={user} date={selectedDate} />
+                <Journal user={user} date={selectedDate} refreshTrigger={refreshTrigger} />
               )}
             </motion.div>
           </AnimatePresence>
@@ -268,7 +391,10 @@ export default function App() {
           user={user}
           profile={profile}
           initialDate={selectedDate}
-          onLogSaved={() => setView('timeline')}
+          onLogSaved={() => {
+            setView('timeline');
+            setRefreshTrigger(prev => prev + 1);
+          }}
         />
       )}
     </div>
