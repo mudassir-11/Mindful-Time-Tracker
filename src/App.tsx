@@ -34,6 +34,7 @@ import Journal from './components/Journal';
 import Onboarding from './components/Onboarding';
 import LogActivityModal from './components/LogActivityModal';
 import RemindersWidget from './components/RemindersWidget';
+import SettingsView from './components/Settings';
 
 type View = 'timeline' | 'goals' | 'reports' | 'journal' | 'settings';
 
@@ -306,9 +307,9 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* Header (Match Design) */}
-        <header className="min-h-[4.5rem] py-2 sm:py-0 sm:h-[4.5rem] bg-surface border-b border-border px-3 sm:px-6 md:px-12 flex items-center justify-between sticky top-0 z-40">
-          <div className="flex items-center">
-            {(view === 'timeline' || view === 'journal') ? (
+        {(view === 'timeline' || view === 'journal') && (
+          <header className="min-h-[4.5rem] py-2 sm:py-0 sm:h-[4.5rem] bg-surface border-b border-border px-3 sm:px-6 md:px-12 flex items-center justify-between sticky top-0 z-40">
+            <div className="flex items-center">
               <div className="flex items-center gap-0.5 sm:gap-1">
                 <button onClick={() => setSelectedDate(subDays(selectedDate, 1))} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors">
                   <ChevronLeft className="w-5 h-5 text-text-muted" />
@@ -320,27 +321,32 @@ export default function App() {
                   <ChevronRight className="w-5 h-5 text-text-muted" />
                 </button>
               </div>
-            ) : (
-              <h2 className="text-sm sm:text-base md:text-lg font-bold text-text-main truncate ml-2">
-                {view === 'goals' && "Intentions"}
-                {view === 'reports' && "Analytics"}
-              </h2>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
-            <button className="hidden sm:flex px-4 py-1.5 text-sm font-semibold text-text-muted border border-border rounded-lg hover:bg-slate-50 transition-colors">
-              Settings
-            </button>
-            <RemindersWidget user={user} />
-            <button 
-              onClick={() => setShowLogModal(true)}
-              className="px-2.5 sm:px-4 py-2 sm:py-1.5 text-xs sm:text-sm font-bold text-white bg-primary rounded-lg shadow-sm shadow-primary/20 hover:opacity-90 transition-opacity"
-            >
-              <span className="hidden sm:inline">+ Log Activity</span>
-              <span className="sm:hidden">+ Log</span>
-            </button>
-          </div>
-        </header>
+            </div>
+            <div className="flex items-center gap-1.5 sm:gap-3 flex-shrink-0">
+              {view === 'timeline' && (
+                <>
+                  <RemindersWidget user={user} />
+                  <button 
+                    onClick={() => setShowLogModal(true)}
+                    className="px-2.5 sm:px-4 py-2 sm:py-1.5 text-xs sm:text-sm font-bold text-white bg-primary rounded-lg shadow-sm shadow-primary/20 hover:opacity-90 transition-opacity"
+                  >
+                    <span className="hidden sm:inline">+ Log Activity</span>
+                    <span className="sm:hidden">+ Log</span>
+                  </button>
+                </>
+              )}
+              {view === 'journal' && (
+                <button 
+                  onClick={() => setView('settings')}
+                  className="p-1.5 sm:p-2 text-text-muted hover:text-text-main border border-border rounded-lg hover:bg-slate-50 transition-colors"
+                  title="Settings"
+                >
+                  <Settings className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+          </header>
+        )}
 
         <div className="p-4 sm:p-6 md:p-12 overflow-y-auto">
           <AnimatePresence mode="wait">
@@ -369,6 +375,9 @@ export default function App() {
               )}
               {view === 'journal' && (
                 <Journal user={user} date={selectedDate} refreshTrigger={refreshTrigger} />
+              )}
+              {view === 'settings' && (
+                <SettingsView user={user} profile={profile} onProfileUpdate={setProfile} />
               )}
             </motion.div>
           </AnimatePresence>

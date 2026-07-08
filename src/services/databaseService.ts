@@ -25,21 +25,10 @@ export const databaseService = {
       return null;
     }
     
-    // Auto-merge logic
-    let needsUpdate = false;
-    const currentCategoryIds = new Set((data.categories || []).map((c: any) => c.id));
-    const updatedCategories = [...(data.categories || [])];
-    
-    for (const defaultCat of DEFAULT_CATEGORIES) {
-      if (!currentCategoryIds.has(defaultCat.id)) {
-        updatedCategories.push(defaultCat);
-        needsUpdate = true;
-      }
-    }
-    
-    if (needsUpdate) {
-      await supabase.from('profiles').update({ categories: updatedCategories }).eq('id', userId);
-      data.categories = updatedCategories;
+    // Initialize default categories if null (new profile without them)
+    if (!data.categories) {
+      await supabase.from('profiles').update({ categories: DEFAULT_CATEGORIES }).eq('id', userId);
+      data.categories = DEFAULT_CATEGORIES;
     }
     
     return {
@@ -57,6 +46,11 @@ export const databaseService = {
       categories: DEFAULT_CATEGORIES,
       onboarding_complete: true
     });
+  },
+
+  async updateUserCategories(userId: string, categories: Category[]): Promise<void> {
+    const { error } = await supabase.from('profiles').update({ categories }).eq('id', userId);
+    if (error) throw new Error(`DB Error: ${error.message}`);
   },
 
   // Activity Logs
