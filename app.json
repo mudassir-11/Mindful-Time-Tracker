@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Prism",
+    "extra": {
+      "eas": {
+        "projectId": "b95ccdf7-0e13-456a-bc34-7d354fed74bb"
+      }
+    }
+  }
+}
